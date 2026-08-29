@@ -1,0 +1,90 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String         @id @default(uuid()) @db.Uuid
+  email           String         @unique
+  passwordHash    String         @map("password_hash")
+  defaultCurrency String         @default("INR") @map("default_currency")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  // ---- Optional profile ----
+  // Every field below is nullable on purpose: registration only ever requires
+  // email + password. These enrich the statistics when supplied and are simply
+  // omitted from the analysis when they are not.
+  name            String?
+  city            String?
+  country         String?
+  /// student | salaried | self_employed | freelancer | other
+  occupation      String?
+  /// Coarse bucket rather than a birth date — enough to cohort by, less to leak.
+  ageGroup        String?        @map("age_group")
+  monthlyIncome   Decimal?       @map("monthly_income") @db.Decimal(14, 2)
+  householdSize   Int?           @map("household_size")
+
+  scenarios       Scenario[]
+  refreshTokens   RefreshToken[]
+
+  // Supports the anonymous city cohort aggregate.
+  @@index([city, defaultCurrency])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  /// SHA-256 of the raw token — the raw value never touches the database.
+  tokenHash String    @unique @map("token_hash")
+  /// Rotation family: reuse of any revoked token revokes the whole family.
+  familyId  String    @map("family_id") @db.Uuid
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("refresh_tokens")
+}
+
+model Scenario {
+  id                  String   @id @default(uuid()) @db.Uuid
+  userId              String   @map("user_id") @db.Uuid
+  name                String
+  currencyCode        String   @default("INR") @map("currency_code")
+  rent                Decimal  @db.Decimal(14, 2)
+  utilities           Decimal  @db.Decimal(14, 2)
+  roommates           Int
+  income              Decimal  @db.Decimal(14, 2)
+  affordabilityTarget Int      @map("affordability_target")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  user                User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  splitMembers        SplitMember[]
+
+  @@index([userId, updatedAt])
+  @@map("scenarios")
+}
+
+model SplitMember {
+  id           String   @id @default(uuid()) @db.Uuid
+  scenarioId   String   @map("scenario_id") @db.Uuid
+  name         String
+  roomType     String?  @map("room_type")
+  sharePercent Decimal  @map("share_percent") @db.Decimal(5, 2)
+  position     Int
+
+  scenario     Scenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+
+  @@index([scenarioId])
+  @@map("split_members")
+}

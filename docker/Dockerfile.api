@@ -1,0 +1,62 @@
+# ---------- deps ----------
+FROM node:22-alpine AS deps
+RUN corepack enable
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/shared/package.json ./packages/shared/
+COPY apps/api/package.json ./apps/api/
+
+# --frozen-lockfile fails the build if the lockfile is stale, which is what we
+# want in CI. Only api + shared are installed; the web app is a separate image.
+RUN pnpm install --frozen-lockfile --filter @rentwise/api... --filter @rentwise/shared...
+
+# ---------- build ----------
+FROM deps AS build
+WORKDIR /app
+
+COPY packages/shared ./packages/shared
+COPY apps/api ./apps/api
+
+RUN pnpm --filter @rentwise/shared build \
+ && pnpm --filter @rentwise/api exec prisma generate \
+ && pnpm --filter @rentwise/api build
+
+# ---------- prune ----------
+# Kept as its own stage so `build` retains devDependencies. The dev compose
+# overlay targets `build` and needs the tsc / nest / vite CLIs that pruning
+# would remove.
+FROM build AS prune
+WORKDIR /app
+
+# CI=true lets pnpm purge the modules directory without an interactive TTY.
+RUN CI=true pnpm prune --prod
+
+# ---------- runner ----------
+FROM node:22-alpine AS runner
+RUN corepack enable
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+# dumb-init reaps zombies and forwards SIGTERM so Nest's shutdown hooks run.
+RUN apk add --no-cache dumb-init
+
+COPY --from=prune /app/node_modules ./node_modules
+COPY --from=prune /app/package.json ./package.json
+COPY --from=prune /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
+COPY --from=prune /app/packages/shared ./packages/shared
+COPY --from=prune /app/apps/api/dist ./apps/api/dist
+COPY --from=prune /app/apps/api/node_modules ./apps/api/node_modules
+COPY --from=prune /app/apps/api/package.json ./apps/api/package.json
+COPY --from=prune /app/apps/api/prisma ./apps/api/prisma
+COPY docker/api-entrypoint.sh /usr/local/bin/api-entrypoint.sh
+
+RUN chmod +x /usr/local/bin/api-entrypoint.sh \
+ && chown -R node:node /app
+
+USER node
+EXPOSE 4000
+
+ENTRYPOINT ["dumb-init", "--", "/usr/local/bin/api-entrypoint.sh"]
+CMD ["node", "apps/api/dist/main.js"]
