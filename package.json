@@ -1,29 +1,30 @@
 {
-  "name": "rentwise-calculator",
+  "name": "rentwise",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": ">=20"
   },
-  "dependencies": {
-    "canvas-confetti": "^1.9.4",
-    "clsx": "^2.1.1",
-    "lucide-react": "^0.469.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+  "scripts": {
+    "build": "pnpm --filter @rentwise/shared build && pnpm --filter @rentwise/web build",
+    "dev:web": "pnpm --filter @rentwise/web dev",
+    "dev:api": "pnpm --filter @rentwise/api start:dev",
+    "test": "pnpm -r test",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "docker:dev": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up",
+    "docker:dev:build": "docker compose -f docker-compose.yml -f docker-compose.dev.yml build",
+    "docker:dev:down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml down",
+    "docker:prod": "docker compose up --build -d",
+    "docker:migrate": "docker compose -f docker-compose.yml -f docker-compose.dev.yml exec api pnpm --filter @rentwise/api exec prisma migrate dev"
   },
   "devDependencies": {
-    "@types/canvas-confetti": "^1.9.0",
-    "@types/react": "^18.3.18",
-    "@types/react-dom": "^18.3.5",
-    "@vitejs/plugin-react": "^4.3.4",
-    "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.49",
-    "tailwindcss": "^3.4.17",
+    "@eslint/js": "^9.17.0",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
     "typescript": "^5.7.2",
-    "vite": "^6.0.7"
+    "typescript-eslint": "^8.19.0"
   }
 }

@@ -1,0 +1,92 @@
+# Development overlay — source is bind-mounted and both apps hot-reload, so a
+# code change needs no `docker compose build`.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+#   web  -> http://localhost:3000   (Vite HMR, proxies /api to the api container)
+#   api  -> http://localhost:4000   (Nest watch mode)
+#   db   -> localhost:5432          (exposed for Prisma Studio / a GUI client)
+#
+# Rebuild ONLY when dependencies or the Dockerfiles change:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml build
+#
+# Both services target the Dockerfiles' `build` stage, which still carries
+# devDependencies and the CLIs (nest, vite, prisma) that the production runner
+# stages deliberately strip out.
+#
+# Only source directories are mounted — never a whole app directory — so the
+# image's node_modules at /app/node_modules and /app/apps/*/node_modules stay
+# intact and are not shadowed by the host.
+
+services:
+  postgres:
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+
+  api:
+    build:
+      target: build
+    # Overrides the runner stage's entrypoint, which does not exist on `build`.
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        set -e
+        echo "[dev] applying migrations..."
+        pnpm --filter @rentwise/api exec prisma migrate deploy
+        echo "[dev] building shared once, then watching it..."
+        pnpm --filter @rentwise/shared build
+        # The API consumes @rentwise/shared from its compiled dist, so a tsc
+        # watcher must rebuild it for Nest's watcher to pick the change up.
+        pnpm --filter @rentwise/shared dev &
+        echo "[dev] starting Nest in watch mode"
+        exec pnpm --filter @rentwise/api start:dev
+    environment:
+      NODE_ENV: development
+      CORS_ORIGIN: http://localhost:3000,http://localhost:8080,http://localhost
+    ports:
+      - '${API_PORT:-4000}:4000'
+    volumes:
+      - ./apps/api/src:/app/apps/api/src
+      - ./apps/api/prisma:/app/apps/api/prisma
+      - ./packages/shared/src:/app/packages/shared/src
+    # Watch mode restarts on its own; a healthcheck failure mid-restart would
+    # otherwise take the container down.
+    healthcheck:
+      disable: true
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+      target: build
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - exec pnpm --filter @rentwise/web dev --host 0.0.0.0
+    environment:
+      # Vite proxies /api to the api service inside the compose network.
+      VITE_API_PROXY_TARGET: http://api:4000
+    ports:
+      - '${WEB_PORT:-3000}:3000'
+    volumes:
+      - ./apps/web/src:/app/apps/web/src
+      - ./apps/web/index.html:/app/apps/web/index.html
+      - ./apps/web/vite.config.ts:/app/apps/web/vite.config.ts
+      - ./apps/web/tailwind.config.js:/app/apps/web/tailwind.config.js
+      - ./apps/web/postcss.config.js:/app/apps/web/postcss.config.js
+      # Vite aliases @rentwise/shared straight to this source, so shared edits
+      # hot-reload in the browser with no build step at all.
+      - ./packages/shared/src:/app/packages/shared/src
+    depends_on:
+      - api
+    networks: [rentwise]
+
+  # The production nginx image serves a baked-in static build, which would go
+  # stale the moment you edit anything. Vite serves the app in dev instead.
+  # Start it explicitly with `--profile full` to smoke-test the prod path.
+  nginx:
+    profiles: ['full']
+    # The dev api has no healthcheck, so waiting for `service_healthy` here
+    # would hang forever.
+    depends_on:
+      api:
+        condition: service_started
